@@ -163,6 +163,16 @@
 
   .drag-hint { margin-top: 6px; font-size: 11px; color: var(--text-muted); }
 
+  .shadow-box { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); }
+  .shadow-toggle-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; font-weight: 700; color: var(--text-primary);
+    cursor: pointer; user-select: none;
+  }
+  .shadow-toggle-row input[type="checkbox"] { accent-color: #EE4D2D; width: 15px; height: 15px; }
+  .shadow-sliders { margin-top: 8px; display: none; }
+  .shadow-sliders .reset-btn { margin-top: 6px; width: 100%; }
+
   .layer-list { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
   .layer-list-heading { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
   .layer-card {
@@ -1483,7 +1493,10 @@
         dataUrl: st.isDefault ? null : st.img.src,
         scale: st.scale || 1,
         offsetX: st.offsetX || 0,
-        offsetY: st.offsetY || 0
+        offsetY: st.offsetY || 0,
+        shadowEnabled: !!st.shadowEnabled,
+        shadowOffsetX: st.shadowOffsetX || 0,
+        shadowOffsetY: st.shadowOffsetY != null ? st.shadowOffsetY : 12
       };
     });
     allTemplateState[TPL.id] = {
@@ -1514,13 +1527,19 @@
         currentState.scale = s.scale;
         currentState.offsetX = s.offsetX;
         currentState.offsetY = s.offsetY;
+        currentState.shadowEnabled = !!s.shadowEnabled;
+        currentState.shadowOffsetX = s.shadowOffsetX || 0;
+        currentState.shadowOffsetY = s.shadowOffsetY != null ? s.shadowOffsetY : 12;
       } else if (s.dataUrl) {
         var img = new Image();
         img.onload = function () { renderInteractive(); };
         img.src = s.dataUrl;
         imageState[fid] = {
           img: img, isDefault: false, defaultSrc: field.src,
-          scale: s.scale, offsetX: s.offsetX, offsetY: s.offsetY
+          scale: s.scale, offsetX: s.offsetX, offsetY: s.offsetY,
+          shadowEnabled: !!s.shadowEnabled,
+          shadowOffsetX: s.shadowOffsetX || 0,
+          shadowOffsetY: s.shadowOffsetY != null ? s.shadowOffsetY : 12
         };
       }
     });
@@ -1584,7 +1603,7 @@
       var img = new Image();
       img.onload = function () { renderInteractive(); };
       img.src = f.src;
-      imageState[f.id] = { img: img, isDefault: true, defaultSrc: f.src, scale: 1, offsetX: 0, offsetY: 0 };
+      imageState[f.id] = { img: img, isDefault: true, defaultSrc: f.src, scale: 1, offsetX: 0, offsetY: 0, shadowEnabled: false, shadowOffsetX: 0, shadowOffsetY: 12 };
     });
 
     var fixedAssets = TPL.fixedAssets || [];
@@ -1784,11 +1803,26 @@
   function renderImageField(ctx, field) {
     var geo = computeImageGeometry(field);
     if (!geo) return;
+    var state = imageState[field.id];
     ctx.save();
     ctx.beginPath();
     ctx.rect(geo.clip.x, geo.clip.y, geo.clip.width, geo.clip.height);
     ctx.clip();
+    // Canvas natively casts a shadow from the drawn image's own alpha shape
+    // (its real silhouette, not a generic ellipse), so this gives a correctly
+    // product-shaped shadow for free -- just set the shadow props before
+    // drawImage and clear them again right after.
+    if (state && state.shadowEnabled) {
+      ctx.shadowColor = "rgba(0,0,0," + (state.shadowOpacity != null ? state.shadowOpacity : 0.45) + ")";
+      ctx.shadowBlur = state.shadowBlur != null ? state.shadowBlur : 16;
+      ctx.shadowOffsetX = state.shadowOffsetX || 0;
+      ctx.shadowOffsetY = state.shadowOffsetY != null ? state.shadowOffsetY : 12;
+    }
     ctx.drawImage(geo.img, geo.dx, geo.dy, geo.drawW, geo.drawH);
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
     ctx.restore();
   }
 
@@ -2161,7 +2195,7 @@
       reader.onload = function (evt) {
         var img = new Image();
         img.onload = function () {
-          imageState[field.id] = { img: img, isDefault: false, defaultSrc: field.src, scale: 1, offsetX: 0, offsetY: 0 };
+          imageState[field.id] = { img: img, isDefault: false, defaultSrc: field.src, scale: 1, offsetX: 0, offsetY: 0, shadowEnabled: false, shadowOffsetX: 0, shadowOffsetY: 12 };
           thumb.src = evt.target.result;
           selectedFieldId = field.id;
           renderInteractive();
@@ -2174,7 +2208,7 @@
     resetBtn.addEventListener("click", function () {
       var img = new Image();
       img.onload = function () {
-        imageState[field.id] = { img: img, isDefault: true, defaultSrc: field.src, scale: 1, offsetX: 0, offsetY: 0 };
+        imageState[field.id] = { img: img, isDefault: true, defaultSrc: field.src, scale: 1, offsetX: 0, offsetY: 0, shadowEnabled: false, shadowOffsetX: 0, shadowOffsetY: 12 };
         thumb.src = field.src;
         selectedFieldId = field.id;
         renderInteractive();
@@ -2188,6 +2222,105 @@
     btnCol.appendChild(resetBtn);
     row.appendChild(btnCol);
     item.appendChild(row);
+
+    // ---------- shadow controls ----------
+    // Canvas casts the shadow from the image's own transparency shape, so
+    // this works for any uploaded product photo without extra processing.
+    var shadowBox = document.createElement("div");
+    shadowBox.className = "shadow-box";
+
+    var shadowToggleRow = document.createElement("label");
+    shadowToggleRow.className = "shadow-toggle-row";
+    var shadowCheckbox = document.createElement("input");
+    shadowCheckbox.type = "checkbox";
+    var shadowToggleText = document.createElement("span");
+    shadowToggleText.textContent = "顯示陰影";
+    shadowToggleRow.appendChild(shadowCheckbox);
+    shadowToggleRow.appendChild(shadowToggleText);
+    shadowBox.appendChild(shadowToggleRow);
+
+    var shadowSlidersWrap = document.createElement("div");
+    shadowSlidersWrap.className = "shadow-sliders";
+
+    function buildShadowSlider(labelText, min, max, getVal, onInput) {
+      var row2 = document.createElement("div");
+      row2.className = "scale-row";
+      var lab = document.createElement("span");
+      lab.className = "scale-label";
+      lab.textContent = labelText;
+      var slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = String(min);
+      slider.max = String(max);
+      slider.step = "1";
+      slider.value = String(getVal());
+      slider.className = "scale-slider";
+      slider.addEventListener("input", function () {
+        onInput(Number(slider.value));
+        selectedFieldId = field.id;
+        renderInteractive();
+      });
+      row2.appendChild(lab);
+      row2.appendChild(slider);
+      return { row: row2, slider: slider };
+    }
+
+    var offsetXCtl = buildShadowSlider(
+      "陰影水平位移", -30, 30,
+      function () { return (imageState[field.id] && imageState[field.id].shadowOffsetX) || 0; },
+      function (v) { if (imageState[field.id]) imageState[field.id].shadowOffsetX = v; }
+    );
+    var offsetYCtl = buildShadowSlider(
+      "陰影垂直位移", -30, 30,
+      function () { return imageState[field.id] ? imageState[field.id].shadowOffsetY : 12; },
+      function (v) { if (imageState[field.id]) imageState[field.id].shadowOffsetY = v; }
+    );
+    shadowSlidersWrap.appendChild(offsetXCtl.row);
+    shadowSlidersWrap.appendChild(offsetYCtl.row);
+
+    var shadowResetBtn = document.createElement("button");
+    shadowResetBtn.type = "button";
+    shadowResetBtn.className = "reset-btn";
+    shadowResetBtn.textContent = "重設陰影位置";
+    shadowResetBtn.addEventListener("click", function () {
+      var st = imageState[field.id];
+      if (!st) return;
+      st.shadowOffsetX = 0;
+      st.shadowOffsetY = 12;
+      offsetXCtl.slider.value = "0";
+      offsetYCtl.slider.value = "12";
+      selectedFieldId = field.id;
+      renderInteractive();
+    });
+    shadowSlidersWrap.appendChild(shadowResetBtn);
+    shadowBox.appendChild(shadowSlidersWrap);
+    item.appendChild(shadowBox);
+
+    function syncShadowUI() {
+      var st = imageState[field.id];
+      var enabled = !!(st && st.shadowEnabled);
+      shadowCheckbox.checked = enabled;
+      shadowSlidersWrap.style.display = enabled ? "block" : "none";
+      if (st) {
+        offsetXCtl.slider.value = String(st.shadowOffsetX || 0);
+        offsetYCtl.slider.value = String(st.shadowOffsetY != null ? st.shadowOffsetY : 12);
+      }
+    }
+    syncShadowUI();
+
+    shadowCheckbox.addEventListener("change", function () {
+      var st = imageState[field.id];
+      if (!st) return;
+      st.shadowEnabled = shadowCheckbox.checked;
+      shadowSlidersWrap.style.display = st.shadowEnabled ? "block" : "none";
+      selectedFieldId = field.id;
+      renderInteractive();
+    });
+
+    // keep the checkbox/sliders in sync if the image is replaced or reset
+    // (those handlers create a brand-new imageState object for this field)
+    fileInput.addEventListener("change", syncShadowUI);
+    resetBtn.addEventListener("click", syncShadowUI);
 
     var dragHint = document.createElement("div");
     dragHint.className = "drag-hint";
